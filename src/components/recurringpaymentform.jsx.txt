@@ -1,0 +1,202 @@
+import { useState, useMemo } from "react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
+import { ChevronDown, Check, Loader2, RepeatIcon } from "lucide-react";
+import JobPickerDrawer from "@/components/JobPickerDrawer";
+import { addWeeks, addMonths, format, parseISO } from "date-fns";
+import { toast } from "sonner";
+
+const FREQUENCIES = [
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Every 2 Weeks" },
+  { value: "monthly", label: "Monthly" },
+];
+
+const METHODS = [
+  { value: "cash", label: "Cash" },
+  { value: "bank_transfer", label: "Bank Transfer" },
+  { value: "check", label: "Check" },
+  { value: "other", label: "Other" },
+];
+
+function generateDates(startDate, frequency, endType, endDate, occurrences) {
+  const dates = [];
+  let current = parseISO(startDate);
+  const limit = endType === "occurrences" ? parseInt(occurrences) : 365; // safety cap
+
+  while (dates.length < limit) {
+    dates.push(format(current, "yyyy-MM-dd"));
+    if (frequency === "weekly") current = addWeeks(current, 1);
+    else if (frequency === "biweekly") current = addWeeks(current, 2);
+    else current = addMonths(current, 1);
+
+    if (endType === "end_date" && format(current, "yyyy-MM-dd") > endDate) break;
+    if (dates.length >= 104) break; // hard cap: 2 years of weekly
+  }
+  return dates;
+}
+
+export default function RecurringPaymentForm({ jobs, onSubmit, isPending }) {
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("cash");
+  const [frequency, setFrequency] = useState("weekly");
+  const [startDate, setStartDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [endType, setEndType] = useState("occurrences"); // "occurrences" | "end_date"
+  const [occurrences, setOccurrences] = useState("4");
+  const [endDate, setEndDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [jobId, setJobId] = useState(null);
+  const [methodDrawerOpen, setMethodDrawerOpen] = useState(false);
+  const [freqDrawerOpen, setFreqDrawerOpen] = useState(false);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+
+  const preview = useMemo(() => {
+    if (!startDate || !amount || parseFloat(amount) <= 0) return [];
+    if (endType === "end_date" && !endDate) return [];
+    if (endType === "occurrences" && (!occurrences || parseInt(occurrences) < 1)) return [];
+    return generateDates(startDate, frequency, endType, endDate, occurrences);
+  }, [startDate, frequency, endType, endDate, occurrences, amount]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!amount || parseFloat(amount) <= 0) { toast.error("Enter a valid amount"); return; }
+    if (preview.length === 0) { toast.error("No payment dates generated"); return; }
+    const payments = preview.map((date) => ({
+      amount: parseFloat(amount),
+      date,
+      method,
+      notes: notes || undefined,
+      ...(jobId ? { job_id: jobId } : {}),
+    }));
+    onSubmit(payments);
+  };
+
+  const freqLabel = FREQUENCIES.find(f => f.value === frequency)?.label ?? "Weekly";
+  const methodLabel = METHODS.find(m => m.value === method)?.label ?? "Cash";
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-6 space-y-5">
+      <div className="space-y-2">
+        <Label className="text-sm font-semibold">Amount per Payment ($)</Label>
+        <Input
+          type="number" step="0.01" min="0" placeholder="0.00"
+          value={amount} onChange={(e) => setAmount(e.target.value)}
+          className="h-14 text-2xl font-bold text-center rounded-xl"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* Frequency */}
+        <div className="space-y-2">
+          <Label className="text-sm font-semibold">Frequency</Label>
+          <Drawer open={freqDrawerOpen} onOpenChange={setFreqDrawerOpen}>
+            <DrawerTrigger asChild>
+              <button type="button" className="w-full h-12 rounded-xl border border-input bg-transparent px-3 flex items-center justify-between text-sm font-medium hover:bg-muted/50 transition-colors">
+                <span>{freqLabel}</span>
+                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </DrawerTrigger>
+            <DrawerContent>
+              <DrawerHeader><DrawerTitle>Frequency</DrawerTitle></DrawerHeader>
+              <div className="px-4 pb-8 space-y-1">
+                {FREQUENCIES.map((f) => (
+                  <button key={f.value} type="button" onClick={() => { setFrequency(f.value); setFreqDrawerOpen(false); }}
+                    className="w-full flex items-center justify-between px-4 py-3.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors">
+                    <span>{f.label}</span>
+                    {frequency === f.value && <Check className="w-4 h-4 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            </DrawerContent>
+          </Drawer>
+        </div>
+
+        {/* Method */}
+        <div className="space-y-2">
+          <Label className="text-sm font-semibold">Method</Label>
+          <Drawer open={methodDrawerOpen} onOpenChange={setMethodDrawerOpen}>
+            <DrawerTrigger asChild>
+              <button type="button" className="w-full h-12 rounded-xl border border-input bg-transparent px-3 flex items-center justify-between text-sm font-medium hover:bg-muted/50 transition-colors">
+                <span>{methodLabel}</span>
+                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </DrawerTrigger>
+            <DrawerContent>
+              <DrawerHeader><DrawerTitle>Payment Method</DrawerTitle></DrawerHeader>
+              <div className="px-4 pb-8 space-y-1">
+                {METHODS.map((m) => (
+                  <button key={m.value} type="button" onClick={() => { setMethod(m.value); setMethodDrawerOpen(false); }}
+                    className="w-full flex items-center justify-between px-4 py-3.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors">
+                    <span>{m.label}</span>
+                    {method === m.value && <Check className="w-4 h-4 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            </DrawerContent>
+          </Drawer>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-sm font-semibold">Start Date</Label>
+        <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-12 rounded-xl" />
+      </div>
+
+      {/* End type toggle */}
+      <div className="space-y-3">
+        <Label className="text-sm font-semibold">End Condition</Label>
+        <div className="grid grid-cols-2 gap-2">
+          {[{ v: "occurrences", l: "# of Payments" }, { v: "end_date", l: "End Date" }].map(({ v, l }) => (
+            <button key={v} type="button" onClick={() => setEndType(v)}
+              className={`h-11 rounded-xl border text-sm font-medium transition-colors ${endType === v ? "bg-primary/10 border-primary text-primary" : "border-input text-muted-foreground hover:bg-muted"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {endType === "occurrences" ? (
+          <Input type="number" min="1" max="104" placeholder="e.g. 12"
+            value={occurrences} onChange={(e) => setOccurrences(e.target.value)}
+            className="h-12 rounded-xl" />
+        ) : (
+          <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="h-12 rounded-xl" />
+        )}
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-sm font-semibold">Job / Client (optional)</Label>
+        <JobPickerDrawer jobs={jobs} value={jobId} onChange={setJobId} open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-sm font-semibold">Notes (optional)</Label>
+        <Input placeholder="e.g. Weekly pay schedule" value={notes} onChange={(e) => setNotes(e.target.value)} className="h-12 rounded-xl" />
+      </div>
+
+      {/* Preview */}
+      {preview.length > 0 && (
+        <div className="bg-muted/60 rounded-xl p-4 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Preview — {preview.length} payment{preview.length !== 1 ? "s" : ""} · Total ${(preview.length * parseFloat(amount || 0)).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          </p>
+          <div className="space-y-1 max-h-36 overflow-y-auto">
+            {preview.map((d, i) => (
+              <div key={d} className="flex justify-between text-sm">
+                <span className="text-muted-foreground">#{i + 1} · {format(parseISO(d), "MMM d, yyyy")}</span>
+                <span className="font-medium">${parseFloat(amount).toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <Button type="submit" disabled={isPending || preview.length === 0}
+        className="w-full h-14 rounded-xl text-base font-bold">
+        {isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+          <><RepeatIcon className="w-4 h-4 mr-2" />Generate {preview.length} Payment{preview.length !== 1 ? "s" : ""}</>
+        )}
+      </Button>
+    </form>
+  );
+}

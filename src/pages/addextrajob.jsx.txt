@@ -1,0 +1,165 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { base44 } from "@/api/base44Client";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Loader2, DollarSign, Clock } from "lucide-react";
+import JobPickerDrawer from "@/components/JobPickerDrawer";
+import HourlyTimer from "@/components/HourlyTimer";
+import { motion } from "framer-motion";
+import { format } from "date-fns";
+import { toast } from "sonner";
+
+export default function AddExtraJob() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [jobId, setJobId] = useState(null);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+
+  // Hourly mode
+  const [mode, setMode] = useState("flat"); // "flat" | "hourly"
+  const [hourlyRate, setHourlyRate] = useState("");
+  const [hourlyResult, setHourlyResult] = useState({ hours: 0, total: 0 });
+
+  const { data: jobs = [] } = useQuery({ queryKey: ["jobs"], queryFn: () => base44.entities.Job.list("-created_date") });
+
+  const mutation = useMutation({
+    mutationFn: (data) => base44.entities.ExtraJob.create(data),
+    onMutate: async (newItem) => {
+      await queryClient.cancelQueries({ queryKey: ["extraJobs"] });
+      const previous = queryClient.getQueryData(["extraJobs"]);
+      queryClient.setQueryData(["extraJobs"], (old = []) => [{ ...newItem, id: `temp-${Date.now()}` }, ...old]);
+      return { previous };
+    },
+    onError: (_err, _vars, context) => queryClient.setQueryData(["extraJobs"], context.previous),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["extraJobs"] });
+      toast.success("Extra job added!");
+      navigate("/");
+    },
+  });
+
+  const finalAmount = mode === "hourly" ? hourlyResult.total : parseFloat(amount);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!finalAmount || finalAmount <= 0) {
+      toast.error("Please enter a valid amount");
+      return;
+    }
+    const realJobId = jobId === "unassigned" ? null : jobId;
+    mutation.mutate({
+      title,
+      description,
+      amount: finalAmount,
+      date,
+      status: "unpaid",
+      ...(mode === "hourly" ? { hourly_rate: parseFloat(hourlyRate), hours_worked: hourlyResult.hours } : {}),
+      ...(realJobId ? { job_id: realJobId } : {}),
+    });
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      <h1 className="text-2xl font-bold text-foreground">Add Extra Job</h1>
+      <p className="text-sm text-muted-foreground mt-1">Record a one-off task or job charged separately.</p>
+
+      <form onSubmit={handleSubmit} className="mt-8 space-y-5">
+        <div className="space-y-2">
+          <Label htmlFor="title" className="text-sm font-semibold">Job Title</Label>
+          <Input
+            id="title"
+            placeholder="e.g. Fixed the fence, Cleaned gutters..."
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="h-12 rounded-xl"
+            required
+          />
+        </div>
+
+        {/* Mode toggle */}
+        <div className="flex rounded-xl overflow-hidden border border-border">
+          <button
+            type="button"
+            onClick={() => setMode("flat")}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-semibold transition-colors ${mode === "flat" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+          >
+            <DollarSign className="w-4 h-4" /> Flat Rate
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("hourly")}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-semibold transition-colors ${mode === "hourly" ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+          >
+            <Clock className="w-4 h-4" /> Hourly
+          </button>
+        </div>
+
+        {mode === "flat" ? (
+          <div className="space-y-2">
+            <Label htmlFor="amount" className="text-sm font-semibold">Charge Amount ($)</Label>
+            <Input
+              id="amount"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="h-14 text-2xl font-bold text-center rounded-xl"
+            />
+          </div>
+        ) : (
+          <HourlyTimer
+            hourlyRate={hourlyRate}
+            onHourlyRateChange={setHourlyRate}
+            onResult={setHourlyResult}
+          />
+        )}
+
+        <div className="space-y-2">
+          <Label htmlFor="date" className="text-sm font-semibold">Date Done</Label>
+          <Input
+            id="date"
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="h-12 rounded-xl"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-semibold">Job / Client (optional)</Label>
+          <JobPickerDrawer jobs={jobs} value={jobId} onChange={setJobId} open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="description" className="text-sm font-semibold">Description (optional)</Label>
+          <Textarea
+            id="description"
+            placeholder="Any extra details about the job..."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="rounded-xl"
+          />
+        </div>
+
+        <Button
+          type="submit"
+          disabled={mutation.isPending}
+          className="w-full h-14 rounded-xl text-base font-bold bg-accent hover:bg-accent/90"
+        >
+          {mutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Add Extra Job"}
+        </Button>
+      </form>
+    </motion.div>
+  );
+}

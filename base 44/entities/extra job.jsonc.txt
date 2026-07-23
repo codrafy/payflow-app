@@ -1,0 +1,61 @@
+{
+  "name": "ExtraJob",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Name of the job or task"
+    },
+    "description": {
+      "type": "string",
+      "description": "Details about the job"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Charge amount for this job"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the job was done"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "unpaid",
+        "paid"
+      ],
+      "default": "unpaid",
+      "description": "Whether this job has been paid"
+    },
+    "job_id": {
+      "type": "string",
+      "description": "ID of the job/client this belongs to"
+    },
+    "hourly_rate": {
+      "type": "number",
+      "description": "Hourly rate charged for this job"
+    },
+    "hours_worked": {
+      "type": "number",
+      "description": "Total hours worked (decimal)"
+    }
+  },
+  "required": [
+    "title",
+    "amount",
+    "date"
+  ],
+  "rls": {
+    "create": {},
+    "read": {
+      "created_by": "{{user.email}}"
+    },
+    "update": {
+      "created_by": "{{user.email}}"
+    },
+    "delete": {
+      "created_by": "{{user.email}}"
+    }
+  }
+}

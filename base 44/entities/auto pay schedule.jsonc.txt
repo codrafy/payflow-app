@@ -1,0 +1,51 @@
+{
+  "name": "AutoPaySchedule",
+  "type": "object",
+  "properties": {
+    "amount": {
+      "type": "number",
+      "description": "Weekly amount to auto-create"
+    },
+    "job_id": {
+      "type": "string",
+      "description": "Optional job ID to link entries to"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional notes added to each entry"
+    },
+    "start_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date from which the auto-pay starts"
+    },
+    "end_mode": {
+      "type": "string",
+      "enum": [
+        "forever",
+        "end_date"
+      ],
+      "default": "forever",
+      "description": "Whether to run forever or until an end date"
+    },
+    "end_date": {
+      "type": "string",
+      "format": "date",
+      "description": "If end_mode is end_date, stop after this date"
+    },
+    "last_created_date": {
+      "type": "string",
+      "format": "date",
+      "description": "The most recent week date that was auto-created"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the schedule is currently active"
+    }
+  },
+  "required": [
+    "amount",
+    "start_date"
+  ]
+}

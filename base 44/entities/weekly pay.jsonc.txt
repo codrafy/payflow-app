@@ -1,0 +1,31 @@
+{
+  "name": "WeeklyPay",
+  "type": "object",
+  "properties": {
+    "week_label": {
+      "type": "string",
+      "description": "Label for the week (e.g. 'Week of Apr 7')"
+    },
+    "amount": {
+      "type": "number",
+      "description": "Amount earned this week"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date of the work week"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional notes about this week"
+    },
+    "job_id": {
+      "type": "string",
+      "description": "ID of the job this pay belongs to"
+    }
+  },
+  "required": [
+    "amount",
+    "date"
+  ]
+}

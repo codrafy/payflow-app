@@ -1,0 +1,70 @@
+import { format } from "date-fns";
+import { motion } from "framer-motion";
+import { Briefcase, HandCoins } from "lucide-react";
+import { Link } from "react-router-dom";
+
+export default function RecentActivity({ weeklyPays, payments }) {
+  const allItems = [
+    ...weeklyPays.map(w => ({ ...w, type: "earn" })),
+    ...payments.map(p => ({ ...p, type: "payment" })),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
+
+  if (allItems.length === 0) {
+    return (
+      <div className="mt-8">
+        <h2 className="text-lg font-bold text-foreground">Recent Activity</h2>
+        <div className="mt-4 text-center py-12 bg-card rounded-2xl border border-border">
+          <p className="text-muted-foreground">No activity yet. Start by adding your weekly pay!</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-8">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-foreground">Recent Activity</h2>
+        <Link to="/history" className="text-sm font-medium text-primary hover:underline">
+          View all
+        </Link>
+      </div>
+      <div className="space-y-2">
+        {allItems.map((item, i) => (
+          <motion.div
+            key={item.id}
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.05 }}
+            className="flex items-center gap-3 p-3.5 bg-card rounded-xl border border-border"
+          >
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
+              item.type === "earn" ? "bg-primary/10" : "bg-accent/10"
+            }`}>
+              {item.type === "earn" ? (
+                <Briefcase className="w-5 h-5 text-primary" />
+              ) : (
+                <HandCoins className="w-5 h-5 text-accent" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-foreground truncate">
+                {item.type === "earn" ? (item.week_label || "Weekly Pay") : "Payment Received"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {format(new Date(item.date), "MMM d, yyyy")}
+                {item.type === "payment" && item.method && (
+                  <span> · {item.method.replace("_", " ")}</span>
+                )}
+              </p>
+            </div>
+            <p className={`text-sm font-bold ${
+              item.type === "earn" ? "text-foreground" : "text-primary"
+            }`}>
+              {item.type === "earn" ? "" : "-"}${item.amount?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}

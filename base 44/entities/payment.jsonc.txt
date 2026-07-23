@@ -1,0 +1,38 @@
+{
+  "name": "Payment",
+  "type": "object",
+  "properties": {
+    "amount": {
+      "type": "number",
+      "description": "Amount paid by boss"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the payment was received"
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "cash",
+        "bank_transfer",
+        "check",
+        "other"
+      ],
+      "default": "cash",
+      "description": "How the payment was made"
+    },
+    "notes": {
+      "type": "string",
+      "description": "Optional notes about this payment"
+    },
+    "job_id": {
+      "type": "string",
+      "description": "ID of the job this payment belongs to"
+    }
+  },
+  "required": [
+    "amount",
+    "date"
+  ]
+}

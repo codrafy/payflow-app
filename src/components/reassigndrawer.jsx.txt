@@ -1,0 +1,36 @@
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
+import { Check, Briefcase } from "lucide-react";
+
+export default function ReassignDrawer({ open, onOpenChange, jobs, onSelect }) {
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange}>
+      <DrawerContent>
+        <DrawerHeader><DrawerTitle>Reassign to Job</DrawerTitle></DrawerHeader>
+        <div className="px-4 pb-8 space-y-1">
+          <button
+            type="button"
+            onClick={() => onSelect(null)}
+            className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+          >
+            <Briefcase className="w-4 h-4 text-muted-foreground" />
+            <span className="text-muted-foreground">No Job (Unassigned)</span>
+          </button>
+          {jobs.map((j) => (
+            <button
+              key={j.id}
+              type="button"
+              onClick={() => onSelect(j.id)}
+              className="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+            >
+              <span className="text-lg">{j.emoji || "💼"}</span>
+              <div className="text-left flex-1">
+                <p>{j.name}</p>
+                {j.boss_name && <p className="text-xs text-muted-foreground">{j.boss_name}</p>}
+              </div>
+            </button>
+          ))}
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}

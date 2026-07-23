@@ -1,0 +1,47 @@
+import { Link } from "react-router-dom";
+import { Plus, HandCoins, Wrench, FileText } from "lucide-react";
+import { motion } from "framer-motion";
+
+const actions = [
+  {
+    to: "/add-pay", icon: Plus, label: "Add Weekly Pay",
+    linkCls: "hover:border-primary/30", iconWrap: "bg-primary/10 group-hover:bg-primary/20", iconCls: "text-primary"
+  },
+  {
+    to: "/add-extra-job", icon: Wrench, label: "Extra Job",
+    linkCls: "hover:border-accent/30", iconWrap: "bg-accent/10 group-hover:bg-accent/20", iconCls: "text-accent"
+  },
+  {
+    to: "/add-payment", icon: HandCoins, label: "Record Payment",
+    linkCls: "hover:border-accent/30", iconWrap: "bg-accent/10 group-hover:bg-accent/20", iconCls: "text-accent"
+  },
+  {
+    to: "/statement", icon: FileText, label: "Statement",
+    linkCls: "hover:border-primary/30", iconWrap: "bg-primary/10 group-hover:bg-primary/20", iconCls: "text-primary"
+  },
+];
+
+export default function QuickActions() {
+  return (
+    <div className="grid grid-cols-2 gap-3 mt-6">
+      {actions.map(({ to, icon: Icon, label, linkCls, iconWrap, iconCls }, i) => (
+        <motion.div
+          key={to}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 + i * 0.05 }}
+        >
+          <Link
+            to={to}
+            className={`flex flex-col items-center gap-2 p-5 rounded-2xl bg-card border border-border hover:shadow-lg transition-all duration-300 group ${linkCls}`}
+          >
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${iconWrap}`}>
+              <Icon className={`w-6 h-6 ${iconCls}`} />
+            </div>
+            <span className="text-sm font-semibold text-foreground">{label}</span>
+          </Link>
+        </motion.div>
+      ))}
+    </div>
+  );
+}

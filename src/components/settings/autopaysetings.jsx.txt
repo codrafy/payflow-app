@@ -1,0 +1,178 @@
+import { useState } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Zap, Pencil, Trash2, Plus } from "lucide-react";
+import { format, parseISO } from "date-fns";
+import { toast } from "sonner";
+import JobPickerDrawer from "@/components/JobPickerDrawer";
+
+function ScheduleForm({ initial, jobs, onSave, onCancel }) {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [amount, setAmount] = useState(initial?.amount ?? "");
+  const [startDate, setStartDate] = useState(initial?.start_date ?? today);
+  const [endMode, setEndMode] = useState(initial?.end_mode ?? "forever");
+  const [endDate, setEndDate] = useState(initial?.end_date ?? "");
+  const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [jobId, setJobId] = useState(initial?.job_id ?? null);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+
+  const handleSave = () => {
+    if (!amount || parseFloat(amount) <= 0) { toast.error("Enter a valid amount"); return; }
+    onSave({
+      amount: parseFloat(amount),
+      start_date: startDate,
+      end_mode: endMode,
+      end_date: endMode === "end_date" ? endDate : null,
+      notes,
+      job_id: jobId || null,
+      active: true,
+    });
+  };
+
+  return (
+    <div className="space-y-4 mt-3">
+      <div className="space-y-1">
+        <Label className="text-xs font-semibold">Weekly Amount ($)</Label>
+        <Input type="number" min="0" step="0.01" placeholder="0.00"
+          value={amount} onChange={(e) => setAmount(e.target.value)} className="h-11 rounded-xl" />
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs font-semibold">Start Date</Label>
+        <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-11 rounded-xl" />
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs font-semibold">Run Until</Label>
+        <div className="grid grid-cols-2 gap-1 bg-muted p-1 rounded-xl">
+          {[{ v: "forever", l: "Forever" }, { v: "end_date", l: "End Date" }].map(({ v, l }) => (
+            <button key={v} type="button" onClick={() => setEndMode(v)}
+              className={`h-8 rounded-lg text-sm font-semibold transition-all ${endMode === v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {endMode === "end_date" && (
+          <Input type="date" value={endDate} min={startDate}
+            onChange={(e) => setEndDate(e.target.value)} className="h-11 rounded-xl mt-2" />
+        )}
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs font-semibold">Job / Client (optional)</Label>
+        <JobPickerDrawer jobs={jobs} value={jobId} onChange={setJobId} open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
+      </div>
+
+      <div className="space-y-1">
+        <Label className="text-xs font-semibold">Notes (optional)</Label>
+        <Input placeholder="Any notes for each entry..." value={notes} onChange={(e) => setNotes(e.target.value)} className="h-11 rounded-xl" />
+      </div>
+
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" onClick={onCancel} className="flex-1 rounded-xl">Cancel</Button>
+        <Button type="button" onClick={handleSave} className="flex-1 rounded-xl">Save Schedule</Button>
+      </div>
+    </div>
+  );
+}
+
+export default function AutoPaySettings() {
+  const queryClient = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const { data: schedules = [] } = useQuery({
+    queryKey: ["autoPaySchedules"],
+    queryFn: () => base44.entities.AutoPaySchedule.list("-created_date"),
+  });
+
+  const { data: jobs = [] } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => base44.entities.Job.list("-created_date"),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data) => base44.entities.AutoPaySchedule.create(data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["autoPaySchedules"] }); setShowForm(false); toast.success("Auto-pay schedule created!"); },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.AutoPaySchedule.update(id, data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["autoPaySchedules"] }); setEditing(null); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => base44.entities.AutoPaySchedule.delete(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["autoPaySchedules"] }); toast.success("Schedule removed"); },
+  });
+
+  const toggleActive = (schedule) => {
+    updateMutation.mutate({ id: schedule.id, data: { active: !schedule.active } });
+  };
+
+  const jobName = (id) => jobs.find((j) => j.id === id)?.name;
+
+  return (
+    <div className="mt-4 bg-card border rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-primary" />
+          <h2 className="font-semibold text-base">Auto Weekly Pay</h2>
+        </div>
+        {!showForm && !editing && (
+          <Button variant="outline" size="sm" className="rounded-xl h-8 gap-1" onClick={() => setShowForm(true)}>
+            <Plus className="w-3.5 h-3.5" /> Add
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">Automatically create a weekly pay entry every week.</p>
+
+      {showForm && (
+        <ScheduleForm jobs={jobs} onSave={(data) => createMutation.mutate(data)} onCancel={() => setShowForm(false)} />
+      )}
+
+      {schedules.length === 0 && !showForm && (
+        <p className="text-sm text-muted-foreground text-center py-3">No schedules yet.</p>
+      )}
+
+      <div className="space-y-3 mt-2">
+        {schedules.map((s) => (
+          <div key={s.id}>
+            {editing?.id === s.id ? (
+              <ScheduleForm initial={s} jobs={jobs}
+                onSave={(data) => updateMutation.mutate({ id: s.id, data })}
+                onCancel={() => setEditing(null)} />
+            ) : (
+              <div className="flex items-start justify-between bg-muted/50 rounded-xl p-3 gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm">${s.amount?.toFixed(2)} / week</p>
+                  <p className="text-xs text-muted-foreground">
+                    From {s.start_date ? format(parseISO(s.start_date), "MMM d, yyyy") : "—"}
+                    {s.end_mode === "end_date" && s.end_date ? ` → ${format(parseISO(s.end_date), "MMM d, yyyy")}` : " · forever"}
+                  </p>
+                  {s.job_id && <p className="text-xs text-muted-foreground">{jobName(s.job_id)}</p>}
+                  {s.last_created_date && (
+                    <p className="text-xs text-muted-foreground">Last auto-added: {format(parseISO(s.last_created_date), "MMM d, yyyy")}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Switch checked={!!s.active} onCheckedChange={() => toggleActive(s)} />
+                  <button onClick={() => setEditing(s)} className="text-muted-foreground hover:text-foreground">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => deleteMutation.mutate(s.id)} className="text-muted-foreground hover:text-destructive">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

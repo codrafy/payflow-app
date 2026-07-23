@@ -1,0 +1,151 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { base44 } from "@/api/base44Client";
+import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from "@/components/ui/drawer";
+import { Loader2, ChevronDown, Check, Repeat } from "lucide-react";
+import JobPickerDrawer from "@/components/JobPickerDrawer";
+import RecurringPaymentForm from "@/components/RecurringPaymentForm";
+import { motion } from "framer-motion";
+import { format } from "date-fns";
+import { toast } from "sonner";
+
+const METHODS = [
+  { value: "cash", label: "Cash" },
+  { value: "bank_transfer", label: "Bank Transfer" },
+  { value: "check", label: "Check" },
+  { value: "other", label: "Other" },
+];
+
+export default function AddPayment() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState("single"); // "single" | "recurring"
+
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [method, setMethod] = useState("cash");
+  const [notes, setNotes] = useState("");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [jobId, setJobId] = useState(null);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+
+  const { data: jobs = [] } = useQuery({ queryKey: ["jobs"], queryFn: () => base44.entities.Job.list("-created_date") });
+
+  const singleMutation = useMutation({
+    mutationFn: (data) => base44.entities.Payment.create(data),
+    onMutate: async (newItem) => {
+      await queryClient.cancelQueries({ queryKey: ["payments"] });
+      const previous = queryClient.getQueryData(["payments"]);
+      queryClient.setQueryData(["payments"], (old = []) => [{ ...newItem, id: `temp-${Date.now()}` }, ...old]);
+      return { previous };
+    },
+    onError: (_err, _vars, context) => queryClient.setQueryData(["payments"], context.previous),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      toast.success("Payment recorded!");
+      navigate("/");
+    },
+  });
+
+  const recurringMutation = useMutation({
+    mutationFn: (payments) => base44.entities.Payment.bulkCreate(payments),
+    onSuccess: (_, payments) => {
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      toast.success(`${payments.length} payments created!`);
+      navigate("/");
+    },
+  });
+
+  const handleSingle = (e) => {
+    e.preventDefault();
+    if (!amount || parseFloat(amount) <= 0) { toast.error("Please enter a valid amount"); return; }
+    const realJobId = jobId === "unassigned" ? null : jobId;
+    singleMutation.mutate({ amount: parseFloat(amount), date, method, notes, ...(realJobId ? { job_id: realJobId } : {}) });
+  };
+
+  const selectedLabel = METHODS.find((m) => m.value === method)?.label ?? "Cash";
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      <h1 className="text-2xl font-bold text-foreground">Record Payment</h1>
+      <p className="text-sm text-muted-foreground mt-1">Log a payment your boss made to you.</p>
+
+      {/* Mode toggle */}
+      <div className="flex gap-2 mt-5">
+        <button type="button" onClick={() => setMode("single")}
+          className={`flex-1 h-10 rounded-xl border text-sm font-semibold transition-colors ${mode === "single" ? "bg-primary text-primary-foreground border-primary" : "border-input text-muted-foreground hover:bg-muted"}`}>
+          One-Time
+        </button>
+        <button type="button" onClick={() => setMode("recurring")}
+          className={`flex-1 h-10 rounded-xl border text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 ${mode === "recurring" ? "bg-primary text-primary-foreground border-primary" : "border-input text-muted-foreground hover:bg-muted"}`}>
+          <Repeat className="w-3.5 h-3.5" /> Recurring
+        </button>
+      </div>
+
+      {mode === "single" ? (
+        <form onSubmit={handleSingle} className="mt-6 space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor="amount" className="text-sm font-semibold">Amount ($)</Label>
+            <Input id="amount" type="number" step="0.01" min="0" placeholder="0.00"
+              value={amount} onChange={(e) => setAmount(e.target.value)}
+              className="h-14 text-2xl font-bold text-center rounded-xl" />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="date" className="text-sm font-semibold">Payment Date</Label>
+            <Input id="date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-12 rounded-xl" />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-sm font-semibold">Payment Method</Label>
+            <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
+              <DrawerTrigger asChild>
+                <button type="button" className="w-full h-12 rounded-xl border border-input bg-transparent px-3 flex items-center justify-between text-sm font-medium hover:bg-muted/50 transition-colors">
+                  <span>{selectedLabel}</span>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </DrawerTrigger>
+              <DrawerContent>
+                <DrawerHeader><DrawerTitle>Payment Method</DrawerTitle></DrawerHeader>
+                <div className="px-4 pb-8 space-y-1">
+                  {METHODS.map((m) => (
+                    <button key={m.value} type="button" onClick={() => { setMethod(m.value); setDrawerOpen(false); }}
+                      className="w-full flex items-center justify-between px-4 py-3.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors">
+                      <span>{m.label}</span>
+                      {method === m.value && <Check className="w-4 h-4 text-primary" />}
+                    </button>
+                  ))}
+                </div>
+              </DrawerContent>
+            </Drawer>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-sm font-semibold">Job / Client (optional)</Label>
+            <JobPickerDrawer jobs={jobs} value={jobId} onChange={setJobId} open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="notes" className="text-sm font-semibold">Notes (optional)</Label>
+            <Textarea id="notes" placeholder="Any extra details..." value={notes} onChange={(e) => setNotes(e.target.value)} className="rounded-xl" />
+          </div>
+
+          <Button type="submit" disabled={singleMutation.isPending} className="w-full h-14 rounded-xl text-base font-bold">
+            {singleMutation.isPending ? <Loader2 className="w-5 h-5 animate-spin" /> : "Record Payment"}
+          </Button>
+        </form>
+      ) : (
+        <RecurringPaymentForm
+          jobs={jobs}
+          onSubmit={(payments) => recurringMutation.mutate(payments)}
+          isPending={recurringMutation.isPending}
+        />
+      )}
+    </motion.div>
+  );
+}

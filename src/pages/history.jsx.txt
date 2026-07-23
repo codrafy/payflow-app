@@ -1,0 +1,249 @@
+import { useState, useCallback } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+import { format } from "date-fns";
+import { motion, AnimatePresence } from "framer-motion";
+import { Briefcase, HandCoins, Wrench, Loader2, Trash2, RefreshCw, CheckSquare, Square, ArrowRightLeft } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import ReassignDrawer from "@/components/ReassignDrawer";
+
+export default function History() {
+  const [tab, setTab] = useState("all");
+  const [selected, setSelected] = useState(new Set());
+  const [selectMode, setSelectMode] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const queryClient = useQueryClient();
+
+  const handleRefresh = useCallback(async () => { await queryClient.invalidateQueries(); }, [queryClient]);
+  const { refreshing } = usePullToRefresh(handleRefresh);
+
+  const { data: weeklyPays = [], isLoading: loadingPays } = useQuery({ queryKey: ["weeklyPays"], queryFn: () => base44.entities.WeeklyPay.list("-date") });
+  const { data: payments = [], isLoading: loadingPayments } = useQuery({ queryKey: ["payments"], queryFn: () => base44.entities.Payment.list("-date") });
+  const { data: extraJobs = [], isLoading: loadingJobs } = useQuery({ queryKey: ["extraJobs"], queryFn: () => base44.entities.ExtraJob.list("-date") });
+  const { data: jobs = [] } = useQuery({ queryKey: ["jobs"], queryFn: () => base44.entities.Job.list("-created_date") });
+
+  const deletePayMutation = useMutation({
+    mutationFn: (id) => base44.entities.WeeklyPay.delete(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["weeklyPays"] }); toast.success("Entry deleted"); },
+  });
+  const deletePaymentMutation = useMutation({
+    mutationFn: (id) => base44.entities.Payment.delete(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["payments"] }); toast.success("Entry deleted"); },
+  });
+  const deleteJobMutation = useMutation({
+    mutationFn: (id) => base44.entities.ExtraJob.delete(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["extraJobs"] }); toast.success("Entry deleted"); },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (items) => {
+      await Promise.all(items.map((item) => {
+        if (item.type === "earn") return base44.entities.WeeklyPay.delete(item.id);
+        if (item.type === "job") return base44.entities.ExtraJob.delete(item.id);
+        return base44.entities.Payment.delete(item.id);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["weeklyPays"] });
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["extraJobs"] });
+      toast.success(`${selected.size} entries deleted`);
+      setSelected(new Set()); setSelectMode(false); setBulkDeleteOpen(false);
+    },
+  });
+
+  const reassignMutation = useMutation({
+    mutationFn: async ({ items, newJobId }) => {
+      await Promise.all(items.map((item) => {
+        const data = newJobId ? { job_id: newJobId } : { job_id: null };
+        if (item.type === "earn") return base44.entities.WeeklyPay.update(item.id, data);
+        if (item.type === "job") return base44.entities.ExtraJob.update(item.id, data);
+        return base44.entities.Payment.update(item.id, data);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["weeklyPays"] });
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["extraJobs"] });
+      toast.success(`${selected.size} entries reassigned`);
+      setSelected(new Set()); setSelectMode(false); setReassignOpen(false);
+    },
+  });
+
+  const allItems = [
+    ...(tab === "all" || tab === "earnings" ? weeklyPays.map(w => ({ ...w, type: "earn" })) : []),
+    ...(tab === "all" || tab === "jobs" ? extraJobs.map(j => ({ ...j, type: "job" })) : []),
+    ...(tab === "all" || tab === "payments" ? payments.map(p => ({ ...p, type: "payment" })) : []),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const toggleSelect = (key) => {
+    setSelected((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  };
+  const toggleSelectAll = () => {
+    setSelected(selected.size === allItems.length ? new Set() : new Set(allItems.map(i => `${i.type}-${i.id}`)));
+  };
+  const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()); };
+  const getSelectedItems = () => allItems.filter(i => selected.has(`${i.type}-${i.id}`));
+
+  const getJobName = (jobId) => {
+    if (!jobId) return null;
+    const j = jobs.find(j => j.id === jobId);
+    return j ? `${j.emoji || "💼"} ${j.name}` : null;
+  };
+
+  const isLoading = loadingPays || loadingPayments || loadingJobs;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      {refreshing && (
+        <div className="flex justify-center mb-2">
+          <RefreshCw className="w-4 h-4 text-primary animate-spin" />
+        </div>
+      )}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">History</h1>
+          <p className="text-sm text-muted-foreground mt-1">All your earnings and payments.</p>
+        </div>
+        {!selectMode ? (
+          <Button variant="ghost" size="sm" onClick={() => setSelectMode(true)} className="text-muted-foreground">Select</Button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={toggleSelectAll} className="text-muted-foreground text-xs">
+              {selected.size === allItems.length ? "Deselect All" : "Select All"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={exitSelectMode} className="text-muted-foreground text-xs">Cancel</Button>
+          </div>
+        )}
+      </div>
+
+      <Tabs value={tab} onValueChange={(v) => { setTab(v); setSelected(new Set()); }} className="mt-6">
+        <TabsList className="w-full bg-muted rounded-xl h-11">
+          <TabsTrigger value="all" className="flex-1 rounded-lg text-sm font-semibold">All</TabsTrigger>
+          <TabsTrigger value="earnings" className="flex-1 rounded-lg text-sm font-semibold">Weekly</TabsTrigger>
+          <TabsTrigger value="jobs" className="flex-1 rounded-lg text-sm font-semibold">Jobs</TabsTrigger>
+          <TabsTrigger value="payments" className="flex-1 rounded-lg text-sm font-semibold">Payments</TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 text-primary animate-spin" />
+        </div>
+      ) : allItems.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground"><p>No entries yet.</p></div>
+      ) : (
+        <>
+          <div className="mt-4 space-y-2">
+            <AnimatePresence>
+              {allItems.map((item, i) => {
+                const key = `${item.type}-${item.id}`;
+                const isSelected = selected.has(key);
+                const jobLabel = getJobName(item.job_id);
+                return (
+                  <motion.div key={key} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -50 }} transition={{ delay: i * 0.02 }}
+                    onClick={selectMode ? () => toggleSelect(key) : undefined}
+                    className={`flex items-center gap-3 p-3.5 bg-card rounded-xl border transition-colors group cursor-default ${selectMode ? "cursor-pointer" : ""} ${isSelected ? "border-primary bg-primary/5" : "border-border"}`}>
+                    {selectMode && (
+                      <div className="shrink-0">
+                        {isSelected ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-muted-foreground" />}
+                      </div>
+                    )}
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${item.type === "earn" ? "bg-primary/10" : item.type === "job" ? "bg-accent/10" : "bg-green-500/10"}`}>
+                      {item.type === "earn" ? <Briefcase className="w-5 h-5 text-primary" /> : item.type === "job" ? <Wrench className="w-5 h-5 text-accent" /> : <HandCoins className="w-5 h-5 text-green-600" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-foreground truncate">
+                        {item.type === "earn" ? (item.week_label || "Weekly Pay") : item.type === "job" ? item.title : "Payment Received"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {format(new Date(item.date), "MMM d, yyyy")}
+                        {item.type === "payment" && item.method && <span> · {item.method.replace("_", " ")}</span>}
+                        {jobLabel && <span> · {jobLabel}</span>}
+                      </p>
+                      {item.notes && <p className="text-xs text-muted-foreground mt-0.5 truncate">{item.notes}</p>}
+                    </div>
+                    <p className={`text-sm font-bold shrink-0 ${item.type === "payment" ? "text-primary" : "text-foreground"}`}>
+                      {item.type === "payment" ? "-" : "+"}${item.amount?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    {!selectMode && (
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="ghost" size="icon" className="shrink-0 h-11 w-11 text-muted-foreground hover:text-destructive transition-all md:opacity-0 md:group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+                            <AlertDialogDescription>This will permanently remove this {item.type === "earn" ? "pay entry" : item.type === "job" ? "job" : "payment"} from your records.</AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={() =>
+                              item.type === "earn" ? deletePayMutation.mutate(item.id) :
+                              item.type === "job" ? deleteJobMutation.mutate(item.id) :
+                              deletePaymentMutation.mutate(item.id)
+                            } className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </AnimatePresence>
+          </div>
+
+          {/* Bulk action bar */}
+          <AnimatePresence>
+            {selectMode && selected.size > 0 && (
+              <motion.div initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }}
+                className="fixed bottom-24 left-0 right-0 flex justify-center px-4" style={{ paddingBottom: "env(safe-area-inset-bottom)", zIndex: 40 }}>
+                <div className="bg-card border border-border rounded-2xl shadow-xl px-4 py-3 flex items-center gap-3 w-full max-w-lg">
+                  <span className="text-sm font-medium text-foreground flex-1">{selected.size} selected</span>
+                  <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setReassignOpen(true)}>
+                    <ArrowRightLeft className="w-4 h-4" /> Reassign
+                  </Button>
+                  <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="destructive" size="sm" className="gap-1.5">
+                        <Trash2 className="w-4 h-4" /> Delete
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete {selected.size} entries?</AlertDialogTitle>
+                        <AlertDialogDescription>This will permanently remove {selected.size} selected {selected.size === 1 ? "entry" : "entries"}.</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => bulkDeleteMutation.mutate(getSelectedItems())}
+                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </>
+      )}
+
+      <ReassignDrawer
+        open={reassignOpen}
+        onOpenChange={setReassignOpen}
+        jobs={jobs}
+        onSelect={(newJobId) => reassignMutation.mutate({ items: getSelectedItems(), newJobId })}
+      />
+    </motion.div>
+  );
+}

@@ -1,0 +1,390 @@
+import { useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Briefcase, Loader2, Trash2, Download, Mail, FileText, CheckSquare, Square, ArrowRightLeft } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { format } from "date-fns";
+import { toast } from "sonner";
+import { jsPDF } from "jspdf";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
+import ReassignDrawer from "@/components/ReassignDrawer";
+
+export default function JobDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useState("all");
+  const [showStatement, setShowStatement] = useState(false);
+  const [bossEmail, setBossEmail] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(new Set());
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+
+  const isUnassigned = id === "unassigned";
+
+  const { data: jobs = [] } = useQuery({ queryKey: ["jobs"], queryFn: () => base44.entities.Job.list("-created_date") });
+  const job = isUnassigned ? { name: "Unassigned", emoji: "❓", color: "#94a3b8", boss_name: "Records with no job linked" } : jobs.find((j) => j.id === id);
+  const otherJobs = isUnassigned ? jobs : jobs.filter((j) => j.id !== id);
+
+  const { data: weeklyPays = [] } = useQuery({ queryKey: ["weeklyPays"], queryFn: () => base44.entities.WeeklyPay.list("-date") });
+  const { data: payments = [] } = useQuery({ queryKey: ["payments"], queryFn: () => base44.entities.Payment.list("-date") });
+  const { data: extraJobs = [] } = useQuery({ queryKey: ["extraJobs"], queryFn: () => base44.entities.ExtraJob.list("-date") });
+
+  const jobWeeklyPays = isUnassigned ? weeklyPays.filter(w => !w.job_id) : weeklyPays.filter(w => w.job_id === id);
+  const jobPayments = isUnassigned ? payments.filter(p => !p.job_id) : payments.filter(p => p.job_id === id);
+  const jobExtraJobs = isUnassigned ? extraJobs.filter(j => !j.job_id) : extraJobs.filter(j => j.job_id === id);
+
+  const totalEarned = jobWeeklyPays.reduce((s, w) => s + (w.amount || 0), 0) + jobExtraJobs.reduce((s, j) => s + (j.amount || 0), 0);
+  const totalPaid = jobPayments.reduce((s, p) => s + (p.amount || 0), 0);
+  const balance = totalEarned - totalPaid;
+
+  const fmt = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+  const deletePayMutation = useMutation({
+    mutationFn: (itemId) => base44.entities.WeeklyPay.delete(itemId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["weeklyPays"] }); toast.success("Deleted"); },
+  });
+  const deletePaymentMutation = useMutation({
+    mutationFn: (itemId) => base44.entities.Payment.delete(itemId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["payments"] }); toast.success("Deleted"); },
+  });
+  const deleteJobMutation = useMutation({
+    mutationFn: (itemId) => base44.entities.ExtraJob.delete(itemId),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["extraJobs"] }); toast.success("Deleted"); },
+  });
+
+  const reassignMutation = useMutation({
+    mutationFn: async ({ items, newJobId }) => {
+      await Promise.all(items.map((item) => {
+        const data = newJobId ? { job_id: newJobId } : { job_id: null };
+        if (item._type === "earn") return base44.entities.WeeklyPay.update(item.id, data);
+        if (item._type === "extra") return base44.entities.ExtraJob.update(item.id, data);
+        return base44.entities.Payment.update(item.id, data);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["weeklyPays"] });
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["extraJobs"] });
+      toast.success(`${selected.size} entries reassigned`);
+      setSelected(new Set());
+      setSelectMode(false);
+      setReassignOpen(false);
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (items) => {
+      await Promise.all(items.map((item) => {
+        if (item._type === "earn") return base44.entities.WeeklyPay.delete(item.id);
+        if (item._type === "extra") return base44.entities.ExtraJob.delete(item.id);
+        return base44.entities.Payment.delete(item.id);
+      }));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["weeklyPays"] });
+      queryClient.invalidateQueries({ queryKey: ["payments"] });
+      queryClient.invalidateQueries({ queryKey: ["extraJobs"] });
+      toast.success(`${selected.size} entries deleted`);
+      setSelected(new Set());
+      setSelectMode(false);
+      setBulkDeleteOpen(false);
+    },
+  });
+
+  const allItems = [
+    ...(tab === "all" || tab === "earnings" ? jobWeeklyPays.map(w => ({ ...w, _type: "earn" })) : []),
+    ...(tab === "all" || tab === "extra" ? jobExtraJobs.map(j => ({ ...j, _type: "extra" })) : []),
+    ...(tab === "all" || tab === "payments" ? jobPayments.map(p => ({ ...p, _type: "payment" })) : []),
+  ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const toggleSelect = (key) => {
+    setSelected((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  };
+  const toggleSelectAll = () => {
+    setSelected(selected.size === allItems.length ? new Set() : new Set(allItems.map(i => `${i._type}-${i.id}`)));
+  };
+  const exitSelectMode = () => { setSelectMode(false); setSelected(new Set()); };
+
+  const getSelectedItems = () => allItems.filter(i => selected.has(`${i._type}-${i.id}`));
+
+  const handleDownloadPDF = () => {
+    const doc = new jsPDF();
+    const pageW = doc.internal.pageSize.getWidth();
+    let y = 20;
+    const line = () => { doc.setDrawColor(200); doc.line(14, y, pageW - 14, y); y += 6; };
+
+    doc.setFontSize(20); doc.setFont("helvetica", "bold");
+    doc.text(`${job?.emoji || "💼"} ${job?.name || "Job"} — Statement`, 14, y); y += 8;
+    doc.setFontSize(10); doc.setFont("helvetica", "normal"); doc.setTextColor(100);
+    doc.text(`Generated: ${format(new Date(), "MMMM d, yyyy")}`, 14, y);
+    if (job?.boss_name) { doc.text(`Client: ${job.boss_name}`, pageW - 14, y, { align: "right" }); }
+    y += 10; line();
+
+    doc.setTextColor(0); doc.setFontSize(13); doc.setFont("helvetica", "bold");
+    doc.text("Summary", 14, y); y += 7;
+    doc.setFontSize(10); doc.setFont("helvetica", "normal");
+    doc.text(`Total Earned:       ${fmt(totalEarned)}`, 14, y); y += 6;
+    doc.text(`Total Paid:         ${fmt(totalPaid)}`, 14, y); y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.text(`Balance Owed:       ${fmt(balance)}`, 14, y);
+    doc.setTextColor(0); y += 10; line();
+
+    if (jobWeeklyPays.length > 0) {
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.text("Weekly Pay", 14, y); y += 7;
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      jobWeeklyPays.forEach(w => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(w.week_label || w.date, 14, y);
+        doc.text(fmt(w.amount), pageW - 14, y, { align: "right" }); y += 5;
+      });
+      y += 4; line();
+    }
+    if (jobExtraJobs.length > 0) {
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.text("Extra Jobs", 14, y); y += 7;
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      jobExtraJobs.forEach(j => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(`${format(new Date(j.date), "MMM d, yyyy")} – ${j.title}`, 14, y);
+        doc.text(fmt(j.amount), pageW - 14, y, { align: "right" }); y += 5;
+      });
+      y += 4; line();
+    }
+    if (jobPayments.length > 0) {
+      doc.setFontSize(13); doc.setFont("helvetica", "bold"); doc.text("Payments Received", 14, y); y += 7;
+      doc.setFontSize(9); doc.setFont("helvetica", "normal");
+      jobPayments.forEach(p => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(`${format(new Date(p.date), "MMM d, yyyy")} – ${p.method}`, 14, y);
+        doc.text(fmt(p.amount), pageW - 14, y, { align: "right" }); y += 5;
+      });
+    }
+    doc.save(`statement-${job?.name?.replace(/\s+/g, "-").toLowerCase()}-${format(new Date(), "yyyy-MM-dd")}.pdf`);
+    toast.success("PDF downloaded!");
+  };
+
+  const handleSendEmail = async () => {
+    if (!bossEmail) { toast.error("Enter an email"); return; }
+    setSending(true);
+    const lines = [
+      `<h2>${job?.emoji || "💼"} ${job?.name} — Pay Statement</h2>`,
+      `<p><strong>Generated:</strong> ${format(new Date(), "MMMM d, yyyy")}</p><hr/>`,
+      `<p><strong>Total Earned:</strong> ${fmt(totalEarned)}<br/><strong>Total Paid:</strong> ${fmt(totalPaid)}<br/><strong>Balance Owed:</strong> ${fmt(balance)}</p><hr/>`,
+    ];
+    if (jobWeeklyPays.length > 0) {
+      lines.push(`<h3>Weekly Pay</h3><ul>`);
+      jobWeeklyPays.forEach(w => lines.push(`<li>${w.week_label || w.date}: ${fmt(w.amount)}</li>`));
+      lines.push(`</ul>`);
+    }
+    if (jobExtraJobs.length > 0) {
+      lines.push(`<h3>Extra Jobs</h3><ul>`);
+      jobExtraJobs.forEach(j => lines.push(`<li>${format(new Date(j.date), "MMM d, yyyy")} – ${j.title}: ${fmt(j.amount)}</li>`));
+      lines.push(`</ul>`);
+    }
+    if (jobPayments.length > 0) {
+      lines.push(`<h3>Payments Received</h3><ul>`);
+      jobPayments.forEach(p => lines.push(`<li>${format(new Date(p.date), "MMM d, yyyy")} – ${p.method}: ${fmt(p.amount)}</li>`));
+      lines.push(`</ul>`);
+    }
+    await base44.integrations.Core.SendEmail({ to: bossEmail, subject: `Pay Statement – ${job?.name} – ${format(new Date(), "MMMM d, yyyy")}`, body: lines.join("\n") });
+    setSending(false);
+    toast.success("Statement sent!");
+    setBossEmail("");
+  };
+
+  if (!isUnassigned && !job && jobs.length > 0) return <div className="text-center py-20 text-muted-foreground">Job not found.</div>;
+  if (!job) return <div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 text-primary animate-spin" /></div>;
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0" style={{ backgroundColor: (job.color || "#22c55e") + "22" }}>
+          {job.emoji || "💼"}
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">{job.name}</h1>
+          {job.boss_name && <p className="text-sm text-muted-foreground">{job.boss_name}</p>}
+        </div>
+      </div>
+
+      {/* Balance summary */}
+      <div className="bg-card border rounded-2xl p-4 grid grid-cols-3 gap-3 mb-6">
+        <div className="text-center">
+          <p className="text-xs text-muted-foreground">Earned</p>
+          <p className="text-base font-bold text-foreground mt-0.5">{fmt(totalEarned)}</p>
+        </div>
+        <div className="text-center border-x">
+          <p className="text-xs text-muted-foreground">Paid</p>
+          <p className="text-base font-bold text-primary mt-0.5">{fmt(totalPaid)}</p>
+        </div>
+        <div className="text-center">
+          <p className="text-xs text-muted-foreground">Owes</p>
+          <p className={`text-base font-bold mt-0.5 ${balance > 0 ? "text-destructive" : "text-primary"}`}>{fmt(balance)}</p>
+        </div>
+      </div>
+
+      {/* Statement button */}
+      {!isUnassigned && <Button variant="outline" onClick={() => setShowStatement(!showStatement)} className="w-full rounded-xl h-11 mb-6 font-semibold">
+        <FileText className="w-4 h-4 mr-2" /> {showStatement ? "Hide Statement" : "Generate Statement"}
+      </Button>}
+
+      <AnimatePresence>
+        {showStatement && (
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden mb-6">
+            <div className="bg-card border rounded-2xl p-5 space-y-4">
+              <Button onClick={handleDownloadPDF} variant="outline" className="w-full h-11 rounded-xl font-semibold">
+                <Download className="w-4 h-4 mr-2" /> Download PDF
+              </Button>
+              <div className="space-y-2">
+                <Label>Send to Email</Label>
+                <Input type="email" placeholder="boss@example.com" value={bossEmail} onChange={(e) => setBossEmail(e.target.value)} className="h-11 rounded-xl" />
+              </div>
+              <Button onClick={handleSendEmail} disabled={sending} className="w-full h-11 rounded-xl font-bold">
+                {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Mail className="w-4 h-4 mr-2" />Send Statement</>}
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Tabs + select toggle */}
+      <div className="flex items-center justify-between mb-3">
+        <Tabs value={tab} onValueChange={(v) => { setTab(v); setSelected(new Set()); }} className="flex-1 mr-3">
+          <TabsList className="w-full bg-muted rounded-xl h-11">
+            <TabsTrigger value="all" className="flex-1 rounded-lg text-sm font-semibold">All</TabsTrigger>
+            <TabsTrigger value="earnings" className="flex-1 rounded-lg text-sm font-semibold">Weekly</TabsTrigger>
+            <TabsTrigger value="extra" className="flex-1 rounded-lg text-sm font-semibold">Extra</TabsTrigger>
+            <TabsTrigger value="payments" className="flex-1 rounded-lg text-sm font-semibold">Payments</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        {!selectMode ? (
+          <Button variant="ghost" size="sm" onClick={() => setSelectMode(true)} className="text-muted-foreground shrink-0">Select</Button>
+        ) : (
+          <div className="flex items-center gap-1 shrink-0">
+            <Button variant="ghost" size="sm" onClick={toggleSelectAll} className="text-muted-foreground text-xs">
+              {selected.size === allItems.length ? "None" : "All"}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={exitSelectMode} className="text-muted-foreground text-xs">Cancel</Button>
+          </div>
+        )}
+      </div>
+
+      {allItems.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground">
+          <Briefcase className="w-10 h-10 mx-auto mb-3 opacity-30" />
+          <p>No entries yet for this job.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <AnimatePresence>
+            {allItems.map((item, i) => {
+              const key = `${item._type}-${item.id}`;
+              const isSelected = selected.has(key);
+              return (
+                <motion.div key={key} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -50 }} transition={{ delay: i * 0.02 }}
+                  onClick={selectMode ? () => toggleSelect(key) : undefined}
+                  className={`flex items-center gap-3 p-3.5 bg-card rounded-xl border transition-colors group ${selectMode ? "cursor-pointer" : ""} ${isSelected ? "border-primary bg-primary/5" : "border-border"}`}>
+                  {selectMode && (
+                    <div className="shrink-0">
+                      {isSelected ? <CheckSquare className="w-5 h-5 text-primary" /> : <Square className="w-5 h-5 text-muted-foreground" />}
+                    </div>
+                  )}
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 text-sm ${item._type === "earn" ? "bg-primary/10" : item._type === "extra" ? "bg-accent/10" : "bg-green-500/10"}`}>
+                    {item._type === "earn" ? "📅" : item._type === "extra" ? "🔧" : "💰"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-foreground truncate">
+                      {item._type === "earn" ? (item.week_label || "Weekly Pay") : item._type === "extra" ? item.title : "Payment Received"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {format(new Date(item.date), "MMM d, yyyy")}
+                      {item._type === "payment" && item.method && <span> · {item.method.replace("_", " ")}</span>}
+                    </p>
+                  </div>
+                  <p className={`text-sm font-bold shrink-0 ${item._type === "payment" ? "text-primary" : "text-foreground"}`}>
+                    {item._type === "payment" ? "-" : "+"}{fmt(item.amount)}
+                  </p>
+                  {!selectMode && (
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" size="icon" className="shrink-0 h-11 w-11 text-muted-foreground hover:text-destructive transition-all md:opacity-0 md:group-hover:opacity-100">
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+                          <AlertDialogDescription>This will permanently remove this record.</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
+                          <AlertDialogAction onClick={() =>
+                            item._type === "earn" ? deletePayMutation.mutate(item.id) :
+                            item._type === "extra" ? deleteJobMutation.mutate(item.id) :
+                            deletePaymentMutation.mutate(item.id)
+                          } className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                </motion.div>
+              );
+            })}
+          </AnimatePresence>
+        </div>
+      )}
+
+      {/* Bulk action bar */}
+      <AnimatePresence>
+        {selectMode && selected.size > 0 && (
+          <motion.div initial={{ y: 80, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 80, opacity: 0 }}
+            className="fixed bottom-24 left-0 right-0 flex justify-center px-4" style={{ zIndex: 40 }}>
+            <div className="bg-card border border-border rounded-2xl shadow-xl px-4 py-3 flex items-center gap-3 w-full max-w-lg">
+              <span className="text-sm font-medium text-foreground flex-1">{selected.size} selected</span>
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setReassignOpen(true)}>
+                <ArrowRightLeft className="w-4 h-4" /> Reassign
+              </Button>
+              <AlertDialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm" className="gap-1.5">
+                    <Trash2 className="w-4 h-4" /> Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete {selected.size} entries?</AlertDialogTitle>
+                    <AlertDialogDescription>This will permanently remove the selected entries.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => bulkDeleteMutation.mutate(getSelectedItems())}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <ReassignDrawer
+        open={reassignOpen}
+        onOpenChange={setReassignOpen}
+        jobs={otherJobs}
+        onSelect={(newJobId) => reassignMutation.mutate({ items: getSelectedItems(), newJobId })}
+      />
+    </motion.div>
+  );
+}

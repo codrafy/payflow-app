@@ -1,0 +1,71 @@
+import { useCallback } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAutoWeeklyPay } from "@/hooks/useAutoWeeklyPay";
+import BalanceCard from "../components/dashboard/BalanceCard";
+import QuickActions from "../components/dashboard/QuickActions";
+import RecentActivity from "../components/dashboard/RecentActivity";
+import JobsBreakdown from "../components/dashboard/JobsBreakdown";
+import { Loader2, RefreshCw } from "lucide-react";
+import { usePullToRefresh } from "@/hooks/usePullToRefresh";
+
+export default function Dashboard() {
+  useAutoWeeklyPay();
+  const queryClient = useQueryClient();
+
+  const handleRefresh = useCallback(async () => {
+    await queryClient.invalidateQueries();
+  }, [queryClient]);
+
+  const { refreshing } = usePullToRefresh(handleRefresh);
+
+  const { data: weeklyPays = [], isLoading: loadingPays } = useQuery({
+    queryKey: ["weeklyPays"],
+    queryFn: () => base44.entities.WeeklyPay.list("-date"),
+  });
+
+  const { data: payments = [], isLoading: loadingPayments } = useQuery({
+    queryKey: ["payments"],
+    queryFn: () => base44.entities.Payment.list("-date"),
+  });
+
+  const { data: extraJobs = [], isLoading: loadingJobs } = useQuery({
+    queryKey: ["extraJobs"],
+    queryFn: () => base44.entities.ExtraJob.list("-date"),
+  });
+
+  const { data: jobs = [] } = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => base44.entities.Job.list("-created_date"),
+  });
+
+  const isLoading = loadingPays || loadingPayments || loadingJobs;
+
+  const totalEarned = weeklyPays.reduce((sum, w) => sum + (w.amount || 0), 0)
+    + extraJobs.reduce((sum, j) => sum + (j.amount || 0), 0);
+  const totalPaid = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const balance = totalEarned - totalPaid;
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {refreshing && (
+        <div className="flex justify-center mb-2">
+          <RefreshCw className="w-4 h-4 text-primary animate-spin" />
+        </div>
+      )}
+      <h2 className="text-sm font-medium text-muted-foreground tracking-wide uppercase mb-1">Pay Tracker</h2>
+      <BalanceCard totalEarned={totalEarned} totalPaid={totalPaid} balance={balance} />
+      <QuickActions />
+      <JobsBreakdown jobs={jobs} weeklyPays={weeklyPays} payments={payments} extraJobs={extraJobs} />
+      <RecentActivity weeklyPays={weeklyPays} payments={payments} />
+    </div>
+  );
+}

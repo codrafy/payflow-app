@@ -1,0 +1,123 @@
+import { useState, useMemo } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { format, addWeeks, eachWeekOfInterval } from "date-fns";
+import JobPickerDrawer from "@/components/JobPickerDrawer";
+
+export default function AddWeeklyPayModal({ open, onClose, onSaved }) {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const [mode, setMode] = useState("end_date"); // "end_date" | "num_weeks"
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
+  const [numWeeks, setNumWeeks] = useState("4");
+  const [amount, setAmount] = useState("");
+  const [notes, setNotes] = useState("");
+  const [jobId, setJobId] = useState(null);
+  const [jobDrawerOpen, setJobDrawerOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const { data: jobs = [] } = useQuery({ queryKey: ["jobs"], queryFn: () => base44.entities.Job.list("-created_date") });
+
+  const weeks = useMemo(() => {
+    if (!startDate) return [];
+    if (mode === "end_date") {
+      if (!endDate || startDate > endDate) return [];
+      return eachWeekOfInterval({ start: new Date(startDate), end: new Date(endDate) }, { weekStartsOn: 1 });
+    } else {
+      const n = parseInt(numWeeks);
+      if (!n || n < 1) return [];
+      return Array.from({ length: n }, (_, i) => addWeeks(new Date(startDate), i));
+    }
+  }, [mode, startDate, endDate, numWeeks]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!weeks.length || !amount) return;
+    setLoading(true);
+    const entries = weeks.map((weekStart) => ({
+      date: format(weekStart, "yyyy-MM-dd"),
+      week_label: `Week of ${format(weekStart, "MMM d, yyyy")}`,
+      amount: parseFloat(amount),
+      notes,
+      ...(jobId && jobId !== "unassigned" ? { job_id: jobId } : {}),
+    }));
+    await base44.entities.WeeklyPay.bulkCreate(entries);
+    setLoading(false);
+    setStartDate(today); setEndDate(today); setNumWeeks("4"); setAmount(""); setNotes(""); setJobId(null);
+    onSaved();
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Bulk Add Weekly Pay</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+
+          {/* Mode toggle */}
+          <div className="grid grid-cols-2 gap-1 bg-muted p-1 rounded-xl">
+            {[{ v: "end_date", l: "End Date" }, { v: "num_weeks", l: "# of Weeks" }].map(({ v, l }) => (
+              <button key={v} type="button" onClick={() => setMode(v)}
+                className={`h-8 rounded-lg text-sm font-semibold transition-all ${mode === v ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Starting Date</Label>
+            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+          </div>
+
+          {mode === "end_date" ? (
+            <div className="space-y-2">
+              <Label>End Date</Label>
+              <Input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} required />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>Number of Weeks</Label>
+              <Input type="number" min="1" max="104" placeholder="e.g. 12"
+                value={numWeeks} onChange={(e) => setNumWeeks(e.target.value)} required />
+            </div>
+          )}
+
+          {weeks.length > 0 && (
+            <div className="bg-primary/10 border border-primary/20 rounded-lg px-3 py-2 text-sm text-primary">
+              📅 Will create <strong>{weeks.length} week{weeks.length > 1 ? "s" : ""}</strong>
+              {weeks.length > 1 && (
+                <span> ({format(weeks[0], "MMM d")} → {format(weeks[weeks.length - 1], "MMM d, yyyy")})</span>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label>Weekly Amount ($)</Label>
+            <Input type="number" min="0" step="0.01" placeholder="e.g. 500"
+              value={amount} onChange={(e) => setAmount(e.target.value)} required />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Job / Client (optional)</Label>
+            <JobPickerDrawer jobs={jobs} value={jobId} onChange={setJobId} open={jobDrawerOpen} onOpenChange={setJobDrawerOpen} />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Notes (optional)</Label>
+            <Input placeholder="Any notes..." value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+
+          <Button type="submit" className="w-full h-11 rounded-xl font-bold" disabled={loading || !weeks.length}>
+            {loading ? "Saving..." : weeks.length > 1 ? `Add ${weeks.length} Weeks` : "Save Weekly Pay"}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
