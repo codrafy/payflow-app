@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js'
-
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 const supabase = createClient(supabaseUrl, supabaseKey)
@@ -17,5 +16,12 @@ function makeEntity(table) {
 export const base44 = {
   entities: {
     AutoPaySchedule: makeEntity('auto_pay_schedule'),
+  },
+  auth: {
+    me: async () => {
+      const { data, error } = await supabase.auth.getUser()
+      if (error || !data?.user) throw new Error('Not authenticated')
+      return data.user
+    }
   }
 }
